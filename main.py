@@ -14,7 +14,7 @@ import torch.optim as optim
 from torchvision import transforms
 from torch.autograd import Variable
 from torch.utils.data import TensorDataset, DataLoader
-import time 
+import time
 from utils import weights_init, print_args
 from model import *
 
@@ -60,7 +60,7 @@ def guassian_kernel(source, target, kernel_mul=2.0, kernel_num=5, fix_sigma=None
 
     total0 = total.unsqueeze(0).expand(int(total.size(0)), int(total.size(0)), int(total.size(1)))
     total1 = total.unsqueeze(1).expand(int(total.size(0)), int(total.size(0)), int(total.size(1)))
-    L2_distance = ((total0-total1)**2).sum(2) 
+    L2_distance = ((total0-total1)**2).sum(2)
     if fix_sigma:
         bandwidth = fix_sigma
     else:
@@ -99,7 +99,7 @@ def get_entropy_loss(p_softmax):
     mask = p_softmax.ge(args.entropy_thres)
     mask_out = torch.masked_select(p_softmax, mask)
     entropy = -(torch.sum(mask_out * torch.log(mask_out)))
-    
+
     return args.weight_entropy * (entropy / float(p_softmax.size(0)))
 
 # compute entropy
@@ -174,6 +174,7 @@ if __name__ == "__main__":
     correct_array = []
 
     # start training
+    timings = []
     for epoch in range(1, args.epoch+1):
         source_loader_iter = iter(source_loader)
         target_loader_iter = iter(target_loader)
@@ -194,14 +195,14 @@ if __name__ == "__main__":
 
             if args.GPU:
                 s_imgs = Variable(s_imgs.cuda())
-                s_labels = Variable(s_labels.cuda())     
+                s_labels = Variable(s_labels.cuda())
                 t_imgs = Variable(t_imgs.cuda())
 
             opt_g.zero_grad()
             opt_f.zero_grad()
 
             # apply feature extractor to input images
-            s_bottleneck = netG(s_imgs) 
+            s_bottleneck = netG(s_imgs)
             t_bottleneck = netG(t_imgs)
 
             # get classification results
@@ -212,38 +213,43 @@ if __name__ == "__main__":
 
             # get source domain classification error
             s_cls_loss = get_cls_loss(s_logit, s_labels)
-            
+
             # compute entropy loss
             t_prob = F.softmax(t_logit)
             t_entropy_loss = get_entropy_loss(t_prob)
 
             # MMFD loss
             MMD = MMDLoss(s_bottleneck, t_bottleneck)
-            
+
             # Full loss function
             loss = s_cls_loss + t_entropy_loss + args.lambda_val*MMD - args.thres_rec*(t_logit_entropy +s_logit_entropy)
-            
+
             loss.backward()
-            
+
             if (i+1) % 50 == 0:
                 print ("cls_loss: %.4f, MMD:  %.4f, t_HLoss:  %.4f, s_HLoss:  %.4f" % (s_cls_loss.item(), args.lambda_val*MMD.item(), args.thres_rec*t_logit_entropy.item(), args.thres_rec*s_logit_entropy.item()))
-            
+
             opt_g.step()
             opt_f.step()
         print('Training time:', time.time()-tic)
 
         # evaluate model
-        tic = time.time()
         netG.eval()
         netF.eval()
         correct = 0
         t_loader = DataLoader(target_dataset, batch_size=args.batch_size, shuffle=args.shuffle, num_workers=args.num_workers)
+
+        batch_sz=None
         for (t_imgs, t_labels) in t_loader:
+            batch_sz=len(t_labels)
             if args.GPU:
                 t_imgs = Variable(t_imgs.cuda())
+            tic = time.time()
             t_bottleneck = netG(t_imgs)
             t_logit = netF(t_bottleneck)
             pred = F.softmax(t_logit)
+            toc = time.time()
+            timings.append(toc-tic)
             pred = pred.data.cpu().numpy()
             pred = pred.argmax(axis=1)
             t_labels = t_labels.numpy()
@@ -260,7 +266,8 @@ if __name__ == "__main__":
 
         if correct >= max_correct:
             max_correct = correct
-        print('Test time:', time.time()-tic)
+        print('Avg timing so far: ', str(np.array(timings).mean()))
+        print('Test batch size: ', str(batch_sz))
         print ("Epoch {0} accuray: {1}; max acc: {2}".format(epoch, correct, max_correct))
 
     # save results
